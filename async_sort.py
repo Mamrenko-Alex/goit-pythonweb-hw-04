@@ -1,19 +1,10 @@
-#!/usr/bin/env python3
-"""
-Асинхронне сортування файлів за розширенням
-(версія на aiopath / aioshutil / aiofile).
-
-Приклад запуску:
-    python sort_async_aio.py ~/Downloads ~/Sorted
-"""
-
 from __future__ import annotations
 
 import argparse
 import asyncio
 import logging
 from aiopath import AsyncPath
-from aioshutil import copyfile  # асинхронний аналог shutil.copy2
+from aioshutil import copyfile
 
 # Скільки копіювань паралельно — щоб не «забити» диск.
 MAX_PARALLEL_COPIES = 50
