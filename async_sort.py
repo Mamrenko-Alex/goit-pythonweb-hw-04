@@ -1,90 +1,61 @@
-from __future__ import annotations
-
-import argparse
 import asyncio
+import os
+import shutil
 import logging
-from aiopath import AsyncPath
-from aioshutil import copyfile
+import argparse
+from pathlib import Path
 
-# Скільки копіювань паралельно — щоб не «забити» диск.
-MAX_PARALLEL_COPIES = 50
-_sema = asyncio.Semaphore(MAX_PARALLEL_COPIES)
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 
-async def copy_file(src: AsyncPath, dst_root: AsyncPath) -> None:
-    """
-    Копіює *src* у підпапку *dst_root/<ext>* асинхронно.
+async def copy_file(file_path: Path, output_dir: Path):
+    try:
+        extension = file_path.suffix[1:] or "no_extension"
+        target_folder = output_dir / extension
+        target_folder.mkdir(parents=True, exist_ok=True)
 
-    Для демонстрації роботи **aiofile** читаємо перші 64 байти
-    та пишемо їх у LOG, але ядро копіювання робить **aioshutil.copyfile**.
-    """
-    ext = src.suffix.lower().lstrip(".") or "no_extension"
-    dst_dir = dst_root / ext
-    await dst_dir.mkdir(parents=True, exist_ok=True)
-
-    dst_path = dst_dir / src.name
-
-    async with _sema:
-        try:
-            # основне асинхронне копіювання
-            await copyfile(src, dst_path)
-
-            # маленький «бонус» — читаємо перші байти через aiofile
-            # (необов’язково для завдання, просто щоб показати синтаксис)
-            from aiofile import async_open
-
-            async with async_open(src, "rb") as afp:
-                head = await afp.read(64)
-                logging.debug("Перші байти %s: %s", src.name, head[:16].hex())
-
-        except Exception:  # noqa: BLE001
-            logging.exception("Не вдалося скопіювати %s → %s", src, dst_path)
+        target_path = target_folder / file_path.name
+        await asyncio.to_thread(shutil.copy2, file_path, target_path)
+        logging.info(f'Скопійовано: {file_path} → {target_path}')
+    except Exception as e:
+        logging.error(f'Помилка при копіюванні {file_path}: {e}')
 
 
-async def read_folder(src_root: AsyncPath, dst_root: AsyncPath) -> None:
-    """
-    Рекурсивно обходить *src_root* та ставить завдання на копіювання файлів.
-    Використовує асинхронний **rglob** з aiopath.
-    """
-    tasks: list[asyncio.Task] = []
-
-    async for path in src_root.rglob("*"):
-        if await path.is_file():
-            tasks.append(asyncio.create_task(copy_file(path, dst_root)))
-
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+async def read_folder(source_dir: Path, output_dir: Path):
+    tasks = []
+    for root, _, files in os.walk(source_dir):
+        for name in files:
+            file_path = Path(root) / name
+            tasks.append(copy_file(file_path, output_dir))
+    await asyncio.gather(*tasks)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="Асинхронно сортує файли у підпапки за їх розширенням."
-    )
-    parser.add_argument("source", help="Вихідна (source) директорія")
-    parser.add_argument("output", help="Цільова (output) директорія")
+        description='Асинхронне сортування файлів за розширенням.')
+    parser.add_argument('--source', '-s', type=str,
+                        help='Шлях до вихідної папки', required=False)
+    parser.add_argument('--output', '-o', type=str,
+                        help='Шлях до цільової папки', required=False)
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    src_root = AsyncPath(args.source).expanduser().resolve()
-    dst_root = AsyncPath(args.output).expanduser().resolve()
+async def main():
+    args = parse_arguments()
 
-    if not src_root.exists():
-        raise SystemExit(f"Помилка: {src_root} не існує")
+    source_dir = Path(args.source)
+    output_dir = Path(args.output)
 
-    logging.basicConfig(
-        filename="file_sorter_async.log",
-        level=logging.INFO,
-        format="%(asctime)s — %(levelname)s — %(message)s",
-        encoding="utf-8",
-    )
+    if not source_dir.exists() or not source_dir.is_dir():
+        logging.error(f"Вихідна папка не існує: {source_dir}")
+        return
 
-    try:
-        asyncio.run(read_folder(src_root, dst_root))
-    except KeyboardInterrupt:
-        logging.warning("Роботу перервано користувачем (Ctrl-C)")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    logging.info("Початок сортування файлів...")
+    await read_folder(source_dir, output_dir)
+    logging.info("Сортування завершено.")
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    asyncio.run(main())
